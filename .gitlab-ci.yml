@@ -1,0 +1,49 @@
+variables:
+  RELEASE_NAME: glh-vue-admin-boilerplate
+  APP: glh-vue-admin-boilerplate-chart
+  ALIYUN: registry-vpc.cn-hangzhou.aliyuncs.com
+
+stages:
+  # - build
+  # - deploy
+
+build:
+  stage: build
+  image: $ALIYUN/glh/maven
+  script:
+    - TAG=$ALIYUN/glh/${RELEASE_NAME}:`date  +"%Y%m%d%H%M_${CI_BUILD_ID}"`
+    - docker login -u $USER -p $PASSWORD $ALIYUN
+    - docker build -t $TAG .
+    - docker push $TAG
+    - if [ $CI_COMMIT_REF_NAME == 'master' ];then docker tag $TAG ${ALIYUN}/glh/${RELEASE_NAME} && docker push ${ALIYUN}/glh/${RELEASE_NAME};fi
+    - echo "$TAG" > tag.txt
+  artifacts:
+    paths:
+      - tag.txt
+
+deploy:
+  stage: deploy
+  image: $ALIYUN/glh/k8s:helm-v2.8.2
+  artifacts:
+    paths:
+      - tag.txt
+  script:
+    - TAG=`cat tag.txt`
+    - sed -i "s#aliyun_tag#$TAG#" ./chart/templates/deployment.yaml
+    - export DEPLOYS=$(helm ls | grep -w ${APP} | wc -l)
+    - if [ ${DEPLOYS} -eq 0 ];then helm install -n ${APP} --namespace default chart;else helm upgrade ${APP} chart;fi
+
+deploy-prod:
+  stage: deploy
+  when: manual
+  image: $ALIYUN/glh/k8s:helm-v2.8.2
+  artifacts:
+    paths:
+      - tag.txt
+  script:
+    - sed -i 's/vpc/internal/' tag.txt
+    - TAG=`cat tag.txt`
+    - status=$(curl -s -X POST -d project=$RELEASE_NAME -d tag=$TAG -d user=$GITLAB_USER_NAME $DEPLOY_URL)
+    - if [ $status == 'OK' ];then echo $status;else echo $status && exit 1;fi
+  only:
+    - master
